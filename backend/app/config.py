@@ -49,8 +49,24 @@ CORS_ORIGINS = [
     "http://127.0.0.1:4173",
 ]
 
+#: External provider dispatcher flags and keys
+def _bool_env(name: str, default: bool = True) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+USE_MOCK_FLIGHTS: bool = _bool_env("USE_MOCK_FLIGHTS", True)
+AMADEUS_API_KEY: str = os.getenv("AMADEUS_API_KEY", "") or os.getenv("AMADEUS_CLIENT_ID", "")
+AMADEUS_API_SECRET: str = os.getenv("AMADEUS_API_SECRET", "") or os.getenv("AMADEUS_CLIENT_SECRET", "")
+
+USE_MOCK_HOTELS: bool = _bool_env("USE_MOCK_HOTELS", True)
+HOTELBEDS_API_KEY: str = os.getenv("HOTELBEDS_API_KEY", "")
+HOTELBEDS_API_SECRET: str = os.getenv("HOTELBEDS_API_SECRET", "")
+
 CITIES_DEFAULT_LIMIT = int(os.getenv("WAYPOINT_CITIES_LIMIT", "200"))
 
 
 def packagepro_db_exists() -> bool:
     return PACKAGEPRO_DB_PATH.is_file()
+

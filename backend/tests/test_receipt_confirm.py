@@ -67,9 +67,13 @@ def test_receipt_reports_when_budget_guard_negotiated(solver, session):
 
 
 def test_receipt_reports_when_over_budget(solver, client):
-    view = solver.plan({**JODHPUR, "budget": {"amount": "15000.00", "currency": "INR"}})
+    # To get into an over-budget state, we select the package under a high budget,
+    # then manually lower the cap. (Normally BudgetGuard blocks selection).
+    view = solver.plan({**JODHPUR, "budget": {"amount": "50000.00", "currency": "INR"}})
     sid = view["session_id"]
     solver.select_package(sid, JODHPUR_PACKAGE)
+    solver.sessions.update_session(sid, budget_amount="15000.00")
+    
     receipt = solver.trust_receipt(sid)
     assert receipt["budget_guard"].startswith("negotiation required")
     assert "2645.89" in receipt["budget_guard"]
@@ -99,9 +103,11 @@ def test_confirm_requires_a_package(solver):
 
 
 def test_confirm_is_blocked_when_over_budget(solver, client):
-    view = solver.plan({**JODHPUR, "budget": {"amount": "15000.00", "currency": "INR"}})
+    view = solver.plan({**JODHPUR, "budget": {"amount": "50000.00", "currency": "INR"}})
     sid = view["session_id"]
     solver.select_package(sid, JODHPUR_PACKAGE)
+    solver.sessions.update_session(sid, budget_amount="15000.00")
+    
     with pytest.raises(ValueError, match="above the cap"):
         solver.confirm(sid)
 

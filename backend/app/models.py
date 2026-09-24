@@ -83,6 +83,13 @@ class ConfirmRequest(BaseModel):
     pass
 
 
+class RealityCheckRequest(BaseModel):
+    destination: str = Field(..., description="City name or ID for reality check")
+    duration_days: int = Field(..., ge=1, le=30)
+    budget: Money
+    language: str = Field("en-IN", description="BCP-47 language tag for AI explanation")
+
+
 # --------------------------------------------------------------------------
 # Response models
 # --------------------------------------------------------------------------

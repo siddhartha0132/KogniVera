@@ -156,10 +156,22 @@ class Solver:
         guard = BudgetGuard(self.sessions, session_id)
         result = guard.decide(total, action="select_package",
                               detail={"package_id": package_id})
+
+        if result["decision"] != "approved":
+            # BLOCKED — do NOT mutate selected_package_id or total_amount
+            self.sessions.add_trace(
+                session_id, trace.budget_blocked(result["overage"] or "0.00", result["cap"], result["currency"])
+            )
+            return self._session_view(session_id) | {
+                "budget": result,
+                "budget_message": guard.message(result),
+                "package_blocked": True,
+            }
+
         self.sessions.update_session(
             session_id,
             selected_package_id=package_id,
-            status="customizing" if result["decision"] == "approved" else "over_budget",
+            status="customizing",
             currency=pkg["currency"],
             total_amount=money_str(total),
         )
@@ -171,14 +183,9 @@ class Solver:
             session_id,
             trace.itinerary_loaded(pkg, len(comps), money_str(total)),
         )
-        if result["decision"] == "approved":
-            self.sessions.add_trace(
-                session_id, trace.budget_approved(result["remaining"], result["currency"])
-            )
-        else:
-            self.sessions.add_trace(
-                session_id, trace.budget_blocked(result["overage"] or "0.00", result["cap"], result["currency"])
-            )
+        self.sessions.add_trace(
+            session_id, trace.budget_approved(result["remaining"], result["currency"])
+        )
         it = ItineraryService(self.pro, self.sessions, session_id)
         it._persist_cart()
         return self._session_view(session_id, recommendations=None)

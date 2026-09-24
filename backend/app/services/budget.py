@@ -35,7 +35,7 @@ class BudgetGuard:
 
         if over is None:
             decision = "approved"
-            options: list[str] = []
+            options: list[Any] = []
         else:
             decision = "blocked"
             options = list(BUDGET_NEGOTIATION_OPTIONS)
@@ -47,6 +47,8 @@ class BudgetGuard:
             amount=money_str(total) if decision == "approved" else money_str(over),
             currency=currency,
         )
+        item_lbl = (detail or {}).get("label") or action
+        struct_opts = self.structured_options(over or Decimal("0"), item_lbl) if over is not None else []
         return {
             "decision": decision,
             "cap": money_str(cap),
@@ -55,7 +57,30 @@ class BudgetGuard:
             "remaining": money_str(rem),
             "overage": money_str(over) if over is not None else None,
             "negotiation_options": options,
+            "structured_negotiation_options": struct_opts,
         }
+
+    @staticmethod
+    def structured_options(overage: Decimal, item_label: str) -> list[dict[str, str]]:
+        """Four structured moves: raise cap, approve overage, drop item, swap cheaper."""
+        return [
+            {
+                "choice": "approve_overage",
+                "label": f"Approve the extra ₹{overage:,.0f} for {item_label}",
+            },
+            {
+                "choice": "swap_cheaper",
+                "label": f"Swap {item_label} for a cheaper alternative",
+            },
+            {
+                "choice": "remove_item",
+                "label": f"Drop {item_label} and keep the rest",
+            },
+            {
+                "choice": "raise_cap",
+                "label": "Raise my overall trip budget",
+            },
+        ]
 
     def message(self, result: dict[str, Any]) -> str:
         """Human-readable decision, formatted with the currency symbol."""
@@ -83,13 +108,20 @@ class BudgetGuard:
     def negotiate(self, session: dict[str, Any], option: str,
                   new_budget: Optional[Decimal] = None,
                   cheaper_total: Optional[Decimal] = None) -> dict[str, Any]:
-        if option not in BUDGET_NEGOTIATION_OPTIONS:
+        # Normalize alias options
+        opt_map = {
+            "raise_cap": "raise_budget_cap",
+            "remove_item": "remove_optional_component",
+            "swap_cheaper": "select_cheaper_alternative",
+        }
+        normalized_option = opt_map.get(option, option)
+        if normalized_option not in BUDGET_NEGOTIATION_OPTIONS:
             raise ValueError(f"unknown negotiation option: {option}")
 
         cap = self._cap()
         currency = self._currency()
 
-        if option == "raise_budget_cap":
+        if normalized_option == "raise_budget_cap":
             if new_budget is None:
                 raise ValueError("raise_budget_cap requires a new budget")
             if new_budget <= cap:
@@ -108,7 +140,7 @@ class BudgetGuard:
                                action="raise_budget_cap",
                                detail={"new_cap": money_str(new_budget)})
 
-        if option == "approve_overage":
+        if normalized_option == "approve_overage":
             total = (
                 Decimal(session["total_amount"])
                 if session.get("total_amount")
@@ -127,6 +159,7 @@ class BudgetGuard:
                 "remaining": money_str(pricing.remaining(cap, total)),
                 "overage": money_str(pricing.overage(cap, total) or Decimal("0")),
                 "negotiation_options": [],
+                "structured_negotiation_options": [],
             }
 
         # select_cheaper_alternative / remove_optional_component are resolved by
@@ -137,12 +170,12 @@ class BudgetGuard:
             else Decimal("0")
         )
         self.db.add_audit(
-            self.session_id, f"budget:{option}", "user",
+            self.session_id, f"budget:{normalized_option}", "user",
             {"intended_total": money_str(total)},
             decision="approved", amount=money_str(total), currency=currency,
         )
-        return self.decide(total, action=option,
-                           detail={"option": option, "total": money_str(total)})
+        return self.decide(total, action=normalized_option,
+                           detail={"option": normalized_option, "total": money_str(total)})
 
     # ------------------------------------------------------------------
 

@@ -113,6 +113,120 @@ class PackageProDB:
             (city_id,),
         )
 
+    def packages_for_city(
+        self,
+        city_id: str,
+        min_days: Optional[int] = None,
+        max_days: Optional[int] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT package_id, city_id, name, description, duration_days, base_price, "
+            "currency, theme FROM tour_packages WHERE status='active' AND city_id=?"
+        )
+        params: list[Any] = [city_id]
+        if min_days is not None:
+            sql += " AND duration_days >= ?"
+            params.append(min_days)
+        if max_days is not None:
+            sql += " AND duration_days <= ?"
+            params.append(max_days)
+        sql += " ORDER BY CAST(base_price AS REAL) LIMIT ?"
+        params.append(limit)
+        return self.query(sql, tuple(params))
+
+    def resolve_city(self, text: str) -> Optional[dict[str, Any]]:
+        """Resolve an IATA code, city alias, city ID, or city name to a city row."""
+        if not text:
+            return None
+        raw = text.strip()
+        key = raw.upper()
+
+        iata_map = {
+            "DEL": "New Delhi", "BOM": "Mumbai", "BLR": "Bengaluru", "MAA": "Chennai",
+            "CCU": "Kolkata", "HYD": "Hyderabad", "PNQ": "Pune", "COK": "Kochi",
+            "GOI": "Panaji", "GOX": "Panaji", "JAI": "Jaipur", "UDR": "Udaipur",
+            "JDH": "Jodhpur", "ATQ": "Amritsar", "AGR": "Agra", "VNS": "Varanasi",
+            "LKO": "Lucknow", "IXL": "Leh", "SXR": "Srinagar", "IXM": "Madurai",
+            "TIR": "Tirupati", "VTZ": "Visakhapatnam", "BBI": "Bhubaneswar",
+            "GAU": "Guwahati", "KTM": "Kathmandu", "CMB": "Colombo", "DPS": "Bali",
+            "BKK": "Bangkok", "DXB": "Dubai", "AUH": "Abu Dhabi", "DOH": "Doha",
+            "SIN": "Singapore", "KUL": "Kuala Lumpur", "ZRH": "Zurich",
+        }
+        aliases = {
+            "GOA": "Panaji", "BANGALORE": "Bengaluru", "MYSORE": "Mysuru",
+            "TRIVANDRUM": "Thiruvananthapuram", "COCHIN": "Kochi", "BOMBAY": "Mumbai",
+            "CALCUTTA": "Kolkata", "MADRAS": "Chennai", "DELHI": "New Delhi",
+            "VIZAG": "Visakhapatnam",
+        }
+
+        # Try city_id direct match
+        by_id = self.city(raw)
+        if by_id:
+            return by_id
+
+        # Try candidates from IATA / alias / raw
+        candidates = [iata_map.get(key), aliases.get(key), raw]
+        for cand in candidates:
+            if not cand:
+                continue
+            r = self.query_one(
+                "SELECT city_id, name, state, country_code, timezone, region, primary_language "
+                "FROM cities WHERE lower(name) = lower(?) LIMIT 1",
+                (cand,),
+            )
+            if r:
+                return r
+            r_like = self.query_one(
+                "SELECT city_id, name, state, country_code, timezone, region, primary_language "
+                "FROM cities WHERE lower(name) LIKE lower(?) LIMIT 1",
+                (f"%{cand}%",),
+            )
+            if r_like:
+                return r_like
+        return None
+
+    def market_benchmark(self, city_id: str, duration_days: int) -> Optional[dict[str, Any]]:
+        """Calculate market-average package pricing per day, falling back to state/country."""
+        city = self.city(city_id)
+        if not city:
+            return None
+
+        def per_day_stats(where: str, params: tuple) -> Optional[dict[str, Any]]:
+            pkgs = self.query(
+                f"SELECT base_price, duration_days FROM tour_packages "
+                f"WHERE status='active' AND duration_days > 0 AND {where}",
+                params,
+            )
+            if not pkgs:
+                return None
+            per_day = sorted(dec(p["base_price"]) / int(p["duration_days"]) for p in pkgs)
+            n = len(per_day)
+            avg = sum(per_day, Decimal("0")) / n
+            return {"avg": avg, "min": per_day[0], "max": per_day[-1], "n": n}
+
+        for level, where, params in (
+            ("city", "city_id = ?", (city_id,)),
+            ("state", "city_id IN (SELECT city_id FROM cities WHERE state = ?)", (city.get("state"),)),
+            ("country", "city_id IN (SELECT city_id FROM cities WHERE country_code = ?)", (city.get("country_code", "IN"),)),
+        ):
+            if not params[0]:
+                continue
+            stats = per_day_stats(where, params)
+            if stats:
+                dur_dec = Decimal(str(max(1, duration_days)))
+                return {
+                    "fallback_level": level,
+                    "city_name": city["name"],
+                    "sample_size": stats["n"],
+                    "price_per_day_avg": stats["avg"],
+                    "total_avg": stats["avg"] * dur_dec,
+                    "total_min": stats["min"] * dur_dec,
+                    "total_max": stats["max"] * dur_dec,
+                }
+        return None
+
+
     def package(self, package_id: str) -> Optional[dict[str, Any]]:
         return self.query_one(
             """SELECT package_id, city_id, name, theme, tier, duration_days,

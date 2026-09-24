@@ -16,6 +16,7 @@ from ..models import (
     LanguageModel,
     NegotiateRequest,
     PlannerRequest,
+    RealityCheckRequest,
     SelectGuideRequest,
     SwapRequest,
 )
@@ -274,3 +275,48 @@ def select_hotel(session_id: str, hotel: Optional[dict[str, Any]] = None) -> dic
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.post("/reality-check")
+def reality_check(request: RealityCheckRequest) -> dict[str, Any]:
+    """Pre-planning sanity check: compare user budget vs market benchmark.
+
+    Works before any session exists — caller supplies destination,
+    duration and budget. Returns verdict (comfortable/tight/unrealistic),
+    gap analysis, and a multilingual AI explanation.
+    """
+    from decimal import Decimal
+    from ..services.reality import compare_budget_to_market
+
+    try:
+        return compare_budget_to_market(
+            pro=_pro(),
+            destination=request.destination,
+            duration_days=request.duration_days,
+            budget_cap=Decimal(request.budget.amount),
+            currency=request.budget.currency,
+            language=request.language,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+
+@router.post("/sessions/{session_id}/suggest-plan")
+def suggest_plan(session_id: str) -> dict[str, Any]:
+    """Proactive AI plan suggestion triggered when destination is confirmed.
+
+    Searches flights + hotels via provider dispatcher (mock or live),
+    scores packages via recommender, matches guide, enforces BudgetGuard,
+    and returns a fully-grounded complete itinerary suggestion.
+    Persists flight_options, hotel_options and suggested_plan to the session.
+    """
+    from ..services.suggested_plan import suggest_plan_for_session
+
+    try:
+        return suggest_plan_for_session(_pro(), _sessions(), session_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))

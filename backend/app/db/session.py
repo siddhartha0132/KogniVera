@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     currency              TEXT,
     confirmed             INTEGER NOT NULL DEFAULT 0,
     confirmation_json     TEXT,
+    selected_flight_json  TEXT,
+    selected_hotel_json   TEXT,
+    pending_json          TEXT,
+    flight_options_json   TEXT,
+    hotel_options_json    TEXT,
+    suggested_plan_json   TEXT,
+    chosen_guide_json     TEXT,
     created_at            TEXT NOT NULL,
     updated_at            TEXT NOT NULL
 );
@@ -122,7 +129,16 @@ class SessionDB:
     def _init_schema(self) -> None:
         with self.connect() as conn, _LOCK:
             conn.executescript(_SCHEMA)
-            for col in ("selected_flight_json", "selected_hotel_json"):
+            new_cols = (
+                "selected_flight_json",
+                "selected_hotel_json",
+                "pending_json",
+                "flight_options_json",
+                "hotel_options_json",
+                "suggested_plan_json",
+                "chosen_guide_json",
+            )
+            for col in new_cols:
                 try:
                     conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} TEXT")
                 except sqlite3.OperationalError:
@@ -145,10 +161,13 @@ class SessionDB:
                     selected_package_id, component_overrides, removed_optional,
                     selected_guide_id, guide_service, guide_cost, guide_multiplier,
                     total_amount, currency, confirmed, confirmation_json,
-                    created_at, updated_at)
+                    selected_flight_json, selected_hotel_json, pending_json,
+                    flight_options_json, hotel_options_json, suggested_plan_json,
+                    chosen_guide_json, created_at, updated_at)
                    VALUES (?, 'planning', ?, ?, ?, NULL, ?, ?, ?, ?, ?,
                            ?, ?, ?, NULL, '{}', '[]', NULL, NULL, NULL, NULL,
-                           NULL, NULL, 0, NULL, ?, ?)""",
+                           NULL, NULL, 0, NULL, NULL, NULL, NULL,
+                           NULL, NULL, NULL, NULL, ?, ?)""",
                 (
                     session_id,
                     json.dumps(request, ensure_ascii=False),
@@ -186,6 +205,16 @@ class SessionDB:
         d.pop("selected_flight_json", None)
         d["selected_hotel"] = json.loads(d["selected_hotel_json"]) if d.get("selected_hotel_json") else None
         d.pop("selected_hotel_json", None)
+        d["pending"] = json.loads(d["pending_json"]) if d.get("pending_json") else None
+        d.pop("pending_json", None)
+        d["flight_options"] = json.loads(d["flight_options_json"]) if d.get("flight_options_json") else []
+        d.pop("flight_options_json", None)
+        d["hotel_options"] = json.loads(d["hotel_options_json"]) if d.get("hotel_options_json") else []
+        d.pop("hotel_options_json", None)
+        d["suggested_plan"] = json.loads(d["suggested_plan_json"]) if d.get("suggested_plan_json") else None
+        d.pop("suggested_plan_json", None)
+        d["chosen_guide"] = json.loads(d["chosen_guide_json"]) if d.get("chosen_guide_json") else None
+        d.pop("chosen_guide_json", None)
         d["confirmed"] = bool(d["confirmed"])
         return d
 
@@ -210,12 +239,29 @@ class SessionDB:
         if "selected_hotel" in fields:
             val = fields.pop("selected_hotel")
             fields["selected_hotel_json"] = json.dumps(val, ensure_ascii=False) if val else None
+        if "pending" in fields:
+            val = fields.pop("pending")
+            fields["pending_json"] = json.dumps(val, ensure_ascii=False) if val else None
+        if "flight_options" in fields:
+            val = fields.pop("flight_options")
+            fields["flight_options_json"] = json.dumps(val, ensure_ascii=False) if val is not None else None
+        if "hotel_options" in fields:
+            val = fields.pop("hotel_options")
+            fields["hotel_options_json"] = json.dumps(val, ensure_ascii=False) if val is not None else None
+        if "suggested_plan" in fields:
+            val = fields.pop("suggested_plan")
+            fields["suggested_plan_json"] = json.dumps(val, ensure_ascii=False) if val is not None else None
+        if "chosen_guide" in fields:
+            val = fields.pop("chosen_guide")
+            fields["chosen_guide_json"] = json.dumps(val, ensure_ascii=False) if val is not None else None
+
         fields["updated_at"] = _now()
         cols = ", ".join(f"{k} = ?" for k in fields)
         params = list(fields.values()) + [session_id]
         with self.connect() as conn, _LOCK:
             conn.execute(f"UPDATE sessions SET {cols} WHERE session_id = ?", params)
             conn.commit()
+
 
     # ------------------------------------------------------------------
     # Trace events (structured, user-safe — never chain-of-thought)
